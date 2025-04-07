@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import Button from './Button';
 import { generateDesign } from '@/services/ai-service';
 import { FormatOption } from './FormatSelector';
+import { Asset } from './AssetsSidebar';
 
 interface Message {
   id: string;
@@ -16,13 +17,15 @@ interface AIDesignAssistantProps {
   currentHtml?: string;
   currentCss?: string;
   selectedFormat: FormatOption | null;
+  availableAssets?: Asset[];
 }
 
 export default function AIDesignAssistant({ 
   onGenerateDesign, 
   currentHtml = '', 
   currentCss = '',
-  selectedFormat
+  selectedFormat,
+  availableAssets = []
 }: AIDesignAssistantProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -72,6 +75,14 @@ export default function AIDesignAssistant({
     ]);
   };
 
+  // Function to get asset information message
+  const getAssetInfo = () => {
+    if (availableAssets.length === 0) return '';
+    
+    const assetNames = availableAssets.map(asset => asset.name);
+    return `\n\nAvailable images: ${assetNames.join(', ')}`;
+  };
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isProcessing) return;
 
@@ -79,7 +90,7 @@ export default function AIDesignAssistant({
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: inputValue
+      content: inputValue + getAssetInfo()
     };
     
     setMessages(prev => [...prev, userMessage]);
@@ -92,7 +103,8 @@ export default function AIDesignAssistant({
         userMessage.content, 
         currentHtml, 
         currentCss,
-        selectedFormat
+        selectedFormat,
+        availableAssets
       );
       
       // Update the design with the generated HTML and CSS
@@ -193,6 +205,11 @@ export default function AIDesignAssistant({
         {selectedFormat && (
           <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             Format: {selectedFormat.name} • {selectedFormat.width}×{selectedFormat.height}px
+          </div>
+        )}
+        {availableAssets.length > 0 && (
+          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Available images: {availableAssets.length}
           </div>
         )}
       </div>

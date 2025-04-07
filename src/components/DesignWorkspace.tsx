@@ -6,6 +6,8 @@ import AIDesignAssistant from './AIDesignAssistant';
 import Button from './Button';
 import FormatSelector, { FormatOption } from './FormatSelector';
 import html2canvas from 'html2canvas';
+import AssetsSidebar, { Asset } from './AssetsSidebar';
+import { getAssets, saveAsset, deleteAsset } from '@/services/asset-service';
 
 export default function DesignWorkspace() {
   // State to track which step of the process we're in
@@ -16,14 +18,28 @@ export default function DesignWorkspace() {
   
   // Design state
   const [designState, setDesignState] = useState({
-    html: '<div class="empty-design"><p>Your design will appear here</p></div>',
-    css: `.empty-design { 
+    html: '<div class="design-container"></div>',
+    css: `.design-container {
+  width: 100%;
+  height: 100%;
+  background-color: white;
+  position: relative;
+  overflow: hidden;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
-  height: 100%;
-  font-family: sans-serif;
-  color: #9CA3AF;
+  text-align: center;
+  box-sizing: border-box;
+}
+.design-container > * {
+  margin: 0 auto;
+  max-width: 100%;
+}
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
 }`
   });
   
@@ -36,6 +52,14 @@ export default function DesignWorkspace() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const exportOptionsRef = useRef<HTMLDivElement>(null);
   
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [showAssetsSidebar, setShowAssetsSidebar] = useState(true);
+  
+  // Load assets on component mount
+  useEffect(() => {
+    setAssets(getAssets());
+  }, []);
+  
   const handleSelectFormat = (format: FormatOption) => {
     setSelectedFormat(format);
   };
@@ -46,12 +70,7 @@ export default function DesignWorkspace() {
     
     // Initialize with an empty container of the correct dimensions
     setDesignState({
-      html: `<div class="design-container">
-  <div class="placeholder-content">
-    <div class="placeholder-text">AI Design Studio</div>
-    <div class="placeholder-subtext">Tell the AI what you'd like to create</div>
-  </div>
-</div>`,
+      html: `<div class="design-container"></div>`,
       css: `.design-container {
   width: 100%;
   height: 100%;
@@ -61,30 +80,20 @@ export default function DesignWorkspace() {
   aspect-ratio: ${selectedFormat.width} / ${selectedFormat.height};
   overflow: hidden;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
+  text-align: center;
+  box-sizing: border-box;
 }
 .design-container > * {
-  /* Ensure direct children of the container are centered */
   margin: 0 auto;
+  max-width: 100%;
 }
-.placeholder-content {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  text-align: center;
-  color: #a0aec0;
-  padding: 2rem;
-  width: 100%;
-}
-.placeholder-text {
-  font-size: 1.5rem;
-  font-weight: bold;
-  margin-bottom: 0.5rem;
-}
-.placeholder-subtext {
-  font-size: 1rem;
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
 }
 `
     });
@@ -98,39 +107,195 @@ export default function DesignWorkspace() {
     setStep('format-selection');
   };
   
-  const handleExport = () => {
+  const handleExport = async () => {
     const { html, css } = designState;
     
-    // Create a blob of the HTML with embedded CSS
-    const fullHtml = `
+    if (!iframeRef.current || !iframeRef.current.contentDocument) {
+      alert('Design preview not available. Please try again.');
+      return;
+    }
+    
+    // Show loading indicator
+    const exportFeedback = document.createElement('div');
+    exportFeedback.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 5px; z-index: 9999;';
+    exportFeedback.textContent = 'Processing HTML export...';
+    document.body.appendChild(exportFeedback);
+    
+    try {
+      // Process HTML to replace asset references with data URLs
+      let processedHtml = html;
+      
+      if (assets.length > 0) {
+        // First, create a map of asset names to URLs
+        const assetMap = assets.reduce((map, asset) => {
+          map[asset.name] = asset.url;
+          return map;
+        }, {} as Record<string, string>);
+        
+        // Replace image references with data URLs
+        const imgRegex = /<img[^>]*src=["']([^"']+)["'][^>]*>/g;
+        let match;
+        let lastIndex = 0;
+        let result = '';
+        
+        while ((match = imgRegex.exec(html)) !== null) {
+          // Add text before the match
+          result += html.substring(lastIndex, match.index);
+          
+          // Get the src attribute
+          const [fullMatch, src] = match;
+          
+          // Check if this is an asset
+          if (assetMap[src]) {
+            try {
+              // Convert to data URL
+              const dataURL = await imageToDataURL(assetMap[src]);
+              // Replace the src with data URL
+              result += fullMatch.replace(`src="${src}"`, `src="${dataURL}"`).replace(`src='${src}'`, `src='${dataURL}'`);
+            } catch (error) {
+              console.error('Failed to convert image to data URL:', error);
+              // If conversion fails, keep the original
+              result += fullMatch;
+            }
+          } else {
+            // Not an asset, keep original
+            result += fullMatch;
+          }
+          
+          lastIndex = imgRegex.lastIndex;
+        }
+        
+        // Add remaining text
+        result += html.substring(lastIndex);
+        processedHtml = result;
+      }
+      
+      // Get dimensions for accurate sizing
+      const width = selectedFormat?.width || 1200;
+      const height = selectedFormat?.height || 800;
+      
+      // Create a blob of the HTML with embedded CSS
+      const fullHtml = `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>${selectedFormat?.name || 'AI Generated Design'}</title>
   <style>
+    /* Base styling */
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: white;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    
+    /* Fixed dimensions container */
+    #design-root {
+      width: ${width}px;
+      height: ${height}px;
+      position: relative;
+      overflow: hidden;
+      background: white;
+      margin: 0 auto;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 0;
+    }
+    
+    /* Design container styling */
+    .design-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 0;
+      margin: 0;
+      box-sizing: border-box;
+    }
+    
+    /* Constrain images and media */
+    img, svg, video, canvas, iframe {
+      max-width: 100%;
+      height: auto;
+    }
+    
+    /* Default styling for child elements */
+    .design-container > * {
+      max-width: 100%;
+      margin: 0 auto;
+    }
+    
+    /* Main CSS from the design */
 ${css}
   </style>
 </head>
 <body>
-${html}
+  <div id="design-root">
+    ${processedHtml}
+  </div>
 </body>
 </html>`;
-    
-    const blob = new Blob([fullHtml], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    
-    // Create download link and trigger click
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${selectedFormat?.id || 'design'}-export.html`;
-    document.body.appendChild(a);
-    a.click();
-    
-    // Clean up
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+      
+      const blob = new Blob([fullHtml], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      
+      // Create download link and trigger click
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${selectedFormat?.id || 'design'}-export.html`;
+      document.body.appendChild(a);
+      a.click();
+      
+      // Clean up
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      // Show success message
+      exportFeedback.textContent = 'Export successful!';
+      setTimeout(() => {
+        document.body.removeChild(exportFeedback);
+      }, 1000);
+    } catch (error) {
+      console.error('Error exporting HTML:', error);
+      alert('There was an issue exporting the HTML. Please try again.');
+      document.body.removeChild(exportFeedback);
+    }
+  };
+
+  // Helper function to convert an image to data URL
+  const imageToDataURL = (url: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0);
+        const dataURL = canvas.toDataURL('image/png');
+        resolve(dataURL);
+      };
+      img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
+      img.src = url;
+    });
   };
 
   // Close export options when clicking outside
@@ -148,114 +313,69 @@ ${html}
   }, []);
 
   const captureDesignAsImage = async (format: 'png' | 'jpg') => {
-    if (!iframeRef.current) return;
-    
     try {
       setIsExporting(true);
       
       // Show a toast notification
       const exportFeedback = document.createElement('div');
       exportFeedback.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 5px; z-index: 9999;';
-      exportFeedback.textContent = 'Preparing for export...';
+      exportFeedback.textContent = 'Preparing export...';
       document.body.appendChild(exportFeedback);
       
-      // Get dimensions
-      const containerWidth = selectedFormat?.width || 1200;
-      const containerHeight = selectedFormat?.height || 800;
-      
-      // Create a div in the document to render the design
-      const renderDiv = document.createElement('div');
-      renderDiv.style.position = 'absolute';
-      renderDiv.style.top = '-9999px';
-      renderDiv.style.left = '-9999px';
-      renderDiv.style.width = `${containerWidth}px`;
-      renderDiv.style.height = `${containerHeight}px`;
-      renderDiv.style.background = 'white';
-      renderDiv.style.overflow = 'hidden';
-      document.body.appendChild(renderDiv);
-      
-      // Get the design content
-      const { html, css } = designState;
-      
-      // Set the content of the div
-      renderDiv.innerHTML = `
-        <style>
-          ${css}
-          /* Force proper dimensions and centering */
-          .design-container {
-            width: ${containerWidth}px !important;
-            height: ${containerHeight}px !important;
-            display: flex !important;
-            justify-content: center !important;
-            align-items: center !important;
-            overflow: hidden !important;
-            background: white !important;
-          }
-        </style>
-        ${html}
-      `;
-      
-      // Wait for content to render
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      try {
-        exportFeedback.textContent = 'Capturing design...';
-        
-        // Use html2canvas to capture the content
-        const canvas = await html2canvas(renderDiv, {
-          width: containerWidth,
-          height: containerHeight,
-          scale: 2,
-          backgroundColor: 'white',
-          useCORS: true,
-          allowTaint: true,
-          logging: false,
-          onclone: (clonedDoc, clonedElement) => {
-            // Make sure design container fills the space
-            const designContainer = clonedElement.querySelector('.design-container');
-            if (designContainer) {
-              (designContainer as HTMLElement).style.cssText = `
-                width: ${containerWidth}px !important;
-                height: ${containerHeight}px !important;
-                display: flex !important;
-                justify-content: center !important;
-                align-items: center !important;
-                overflow: hidden !important;
-                background: white !important;
-                position: relative !important;
-              `;
-            }
-          }
-        });
-        
-        // Convert to data URL
-        const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
-        const quality = format === 'jpg' ? 0.95 : undefined;
-        const dataUrl = canvas.toDataURL(mimeType, quality);
-        
-        // Show the preview
-        setPreviewImage(dataUrl);
-        
-        // Clean up
-        document.body.removeChild(renderDiv);
-        
-        // Show success message
-        exportFeedback.textContent = 'Export successful!';
-        setTimeout(() => {
-          document.body.removeChild(exportFeedback);
-        }, 1000);
-      } catch (error) {
-        console.error('Export error:', error);
-        document.body.removeChild(renderDiv);
-        document.body.removeChild(exportFeedback);
-        alert('Failed to export design. Please try again or use the HTML export option.');
+      if (!iframeRef.current) {
+        throw new Error('Design preview not available');
       }
+      
+      // Super simple direct capture approach
+      const iframe = iframeRef.current;
+      const width = selectedFormat?.width || 1200;
+      const height = selectedFormat?.height || 800;
+      
+      // Create a canvas for capturing
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      
+      if (!ctx) {
+        throw new Error('Could not get canvas context');
+      }
+      
+      // Use html2canvas with minimal configuration to capture exactly what's shown
+      const designRoot = iframe.contentDocument?.getElementById('design-root');
+      if (!designRoot) {
+        throw new Error('Cannot find design container');
+      }
+      
+      const result = await html2canvas(designRoot, {
+        width,
+        height,
+        scale: 2,
+        backgroundColor: 'white',
+        useCORS: true,
+        allowTaint: true,
+        logging: true,
+        // Don't transform anything - just capture what's shown
+        ignoreElements: () => false
+      });
+      
+      // Get the data URL based on the format
+      const dataUrl = result.toDataURL(format === 'jpg' ? 'image/jpeg' : 'image/png', 0.95);
+      
+      // Show the preview
+      setPreviewImage(dataUrl);
+      
+      // Show success message
+      exportFeedback.textContent = 'Export successful!';
+      setTimeout(() => {
+        document.body.removeChild(exportFeedback);
+      }, 1000);
       
       // Close export options dropdown
       setShowExportOptions(false);
     } catch (error) {
       console.error('Export error:', error);
-      alert('Failed to export design. Please try again or use the HTML export option.');
+      alert(`Failed to export design: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsExporting(false);
     }
@@ -297,6 +417,21 @@ ${html}
     closePreview();
   };
 
+  const handleAssetUpload = async (file: File, customName?: string) => {
+    try {
+      const newAsset = await saveAsset(file, customName);
+      setAssets(prev => [newAsset, ...prev]);
+    } catch (error) {
+      console.error('Asset upload error:', error);
+      alert('Failed to upload image.');
+    }
+  };
+  
+  const handleAssetDelete = (assetId: string) => {
+    deleteAsset(assetId);
+    setAssets(prev => prev.filter(asset => asset.id !== assetId));
+  };
+
   return (
     <div className="flex flex-col h-screen">
       <header className="p-4 bg-white dark:bg-gray-800 border-b">
@@ -316,6 +451,12 @@ ${html}
                   onClick={() => setShowCode(!showCode)}
                 >
                   {showCode ? 'Hide Code' : 'Show Code'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowAssetsSidebar(!showAssetsSidebar)}
+                >
+                  {showAssetsSidebar ? 'Hide Assets' : 'Show Assets'}
                 </Button>
                 <div className="relative">
                   <Button 
@@ -396,105 +537,119 @@ ${html}
             </div>
           </div>
         ) : (
-          <div className="h-full flex flex-col md:flex-row">
-            {/* Design Sandbox */}
-            <div className="flex-1 h-1/2 md:h-full">
-              <div className="h-full flex flex-col">
-                <div className="p-2 bg-gray-100 dark:bg-gray-700 border-b flex justify-between items-center">
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {selectedFormat?.name} ({selectedFormat?.width}×{selectedFormat?.height}px)
-                  </span>
-                </div>
-                
-                <div className="flex-1 overflow-hidden p-4 bg-gray-200 dark:bg-gray-900 flex flex-col">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      Zoom: {Math.round(zoomLevel * 100)}%
+          <div className="h-full flex flex-row">
+            {/* Assets Sidebar */}
+            {showAssetsSidebar && (
+              <AssetsSidebar
+                assets={assets}
+                onUpload={handleAssetUpload}
+                onDelete={handleAssetDelete}
+              />
+            )}
+            
+            {/* Design Workspace */}
+            <div className="h-full flex flex-col md:flex-row flex-1">
+              {/* Design Sandbox */}
+              <div className="flex-1 h-1/2 md:h-full">
+                <div className="h-full flex flex-col">
+                  <div className="p-2 bg-gray-100 dark:bg-gray-700 border-b flex justify-between items-center">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {selectedFormat?.name} ({selectedFormat?.width}×{selectedFormat?.height}px)
                     </span>
-                    <div className="flex space-x-2">
-                      <button 
-                        onClick={() => setZoomLevel(prev => Math.max(0.25, prev - 0.1))}
-                        className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
-                        aria-label="Zoom out"
+                  </div>
+                  
+                  <div className="flex-1 overflow-hidden p-4 bg-gray-200 dark:bg-gray-900 flex flex-col">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                        Zoom: {Math.round(zoomLevel * 100)}%
+                      </span>
+                      <div className="flex space-x-2">
+                        <button 
+                          onClick={() => setZoomLevel(prev => Math.max(0.25, prev - 0.1))}
+                          className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+                          aria-label="Zoom out"
+                        >
+                          -
+                        </button>
+                        <button
+                          onClick={() => setZoomLevel(1)}
+                          className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+                          aria-label="Reset zoom"
+                        >
+                          Reset
+                        </button>
+                        <button 
+                          onClick={() => setZoomLevel(prev => Math.min(2, prev + 0.1))}
+                          className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+                          aria-label="Zoom in"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 overflow-auto flex items-center justify-center">
+                      <div 
+                        className="relative overflow-hidden bg-white shadow-2xl" 
+                        style={{
+                          width: selectedFormat ? `${Math.min(selectedFormat.width, 600)}px` : '100%',
+                          height: 'auto',
+                          transform: `scale(${zoomLevel})`,
+                          transformOrigin: 'center',
+                          transition: 'transform 0.2s',
+                          aspectRatio: selectedFormat ? `${selectedFormat.width} / ${selectedFormat.height}` : '1 / 1'
+                        }}
                       >
-                        -
-                      </button>
-                      <button
-                        onClick={() => setZoomLevel(1)}
-                        className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
-                        aria-label="Reset zoom"
-                      >
-                        Reset
-                      </button>
-                      <button 
-                        onClick={() => setZoomLevel(prev => Math.min(2, prev + 0.1))}
-                        className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
-                        aria-label="Zoom in"
-                      >
-                        +
-                      </button>
+                        <DesignSandbox
+                          ref={sandboxRef}
+                          htmlContent={designState.html}
+                          cssContent={designState.css}
+                          className="mx-auto"
+                          width="100%"
+                          height="100%"
+                          getIframeRef={getIframeRef}
+                          assets={assets}
+                        />
+                      </div>
                     </div>
                   </div>
                   
-                  <div className="flex-1 overflow-auto flex items-center justify-center">
-                    <div 
-                      className="relative overflow-hidden bg-white shadow-2xl" 
-                      style={{
-                        width: selectedFormat ? `${Math.min(selectedFormat.width, 600)}px` : '100%',
-                        height: 'auto',
-                        transform: `scale(${zoomLevel})`,
-                        transformOrigin: 'center',
-                        transition: 'transform 0.2s',
-                        aspectRatio: selectedFormat ? `${selectedFormat.width} / ${selectedFormat.height}` : '1 / 1'
-                      }}
-                    >
-                      <DesignSandbox
-                        ref={sandboxRef}
-                        htmlContent={designState.html}
-                        cssContent={designState.css}
-                        className="mx-auto"
-                        width="100%"
-                        height="100%"
-                        getIframeRef={getIframeRef}
-                      />
+                  {showCode && (
+                    <div className="h-64 border-t overflow-auto bg-gray-50 dark:bg-gray-800 p-4">
+                      <div className="flex space-x-4 mb-2">
+                        <Button 
+                          size="sm" 
+                          variant={activeCodeTab === 'html' ? 'secondary' : 'outline'}
+                          onClick={() => handleCodeTabChange('html')}
+                        >
+                          HTML
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant={activeCodeTab === 'css' ? 'secondary' : 'outline'}
+                          onClick={() => handleCodeTabChange('css')}
+                        >
+                          CSS
+                        </Button>
+                      </div>
+                      <pre className="bg-white dark:bg-gray-900 p-4 rounded-md overflow-auto text-sm text-gray-800 dark:text-gray-200 h-40">
+                        {activeCodeTab === 'html' ? designState.html : designState.css}
+                      </pre>
                     </div>
-                  </div>
+                  )}
                 </div>
-                
-                {showCode && (
-                  <div className="h-64 border-t overflow-auto bg-gray-50 dark:bg-gray-800 p-4">
-                    <div className="flex space-x-4 mb-2">
-                      <Button 
-                        size="sm" 
-                        variant={activeCodeTab === 'html' ? 'secondary' : 'outline'}
-                        onClick={() => handleCodeTabChange('html')}
-                      >
-                        HTML
-                      </Button>
-                      <Button 
-                        size="sm" 
-                        variant={activeCodeTab === 'css' ? 'secondary' : 'outline'}
-                        onClick={() => handleCodeTabChange('css')}
-                      >
-                        CSS
-                      </Button>
-                    </div>
-                    <pre className="bg-white dark:bg-gray-900 p-4 rounded-md overflow-auto text-sm text-gray-800 dark:text-gray-200 h-40">
-                      {activeCodeTab === 'html' ? designState.html : designState.css}
-                    </pre>
-                  </div>
-                )}
               </div>
-            </div>
-            
-            {/* AI Assistant */}
-            <div className="w-full md:w-96 h-1/2 md:h-full border-t md:border-t-0 md:border-l">
-              <AIDesignAssistant 
-                onGenerateDesign={handleGenerateDesign} 
-                currentHtml={designState.html}
-                currentCss={designState.css}
-                selectedFormat={selectedFormat}
-              />
+              
+              {/* AI Assistant */}
+              <div className="w-full md:w-96 h-1/2 md:h-full border-t md:border-t-0 md:border-l">
+                <AIDesignAssistant 
+                  onGenerateDesign={handleGenerateDesign} 
+                  currentHtml={designState.html}
+                  currentCss={designState.css}
+                  selectedFormat={selectedFormat}
+                  availableAssets={assets}
+                />
+              </div>
             </div>
           </div>
         )}

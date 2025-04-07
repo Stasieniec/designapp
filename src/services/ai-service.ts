@@ -1,6 +1,7 @@
 "use client";
 
 import { FormatOption } from '@/components/FormatSelector';
+import { Asset } from '@/components/AssetsSidebar';
 
 interface AIResponseContent {
   html: string;
@@ -17,7 +18,8 @@ export async function generateDesign(
   prompt: string, 
   currentHtml: string = '', 
   currentCss: string = '',
-  selectedFormat: FormatOption | null = null
+  selectedFormat: FormatOption | null = null,
+  availableAssets: Asset[] = []
 ): Promise<AIResponse> {
   try {
     // Show a mock response during development if the API call fails
@@ -28,7 +30,7 @@ export async function generateDesign(
       const response = await fetch('/api/ai-design', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, currentHtml, currentCss, selectedFormat })
+        body: JSON.stringify({ prompt, currentHtml, currentCss, selectedFormat, availableAssets })
       });
       
       if (!response.ok) {
@@ -47,7 +49,7 @@ export async function generateDesign(
       }
       
       console.warn('Falling back to mock implementation...');
-      return generateMockDesign(prompt, currentHtml, currentCss, selectedFormat);
+      return generateMockDesign(prompt, currentHtml, currentCss, selectedFormat, availableAssets);
     }
   } catch (error) {
     console.error('Error generating design:', error);
@@ -60,7 +62,8 @@ async function generateMockDesign(
   prompt: string, 
   currentHtml: string = '', 
   currentCss: string = '',
-  selectedFormat: FormatOption | null = null
+  selectedFormat: FormatOption | null = null,
+  availableAssets: Asset[] = []
 ): Promise<AIResponse> {
   // Simulate API delay
   await new Promise(resolve => setTimeout(resolve, 1500));
@@ -80,6 +83,88 @@ async function generateMockDesign(
     message = `I've updated your design based on your request: "${prompt}". You can see the changes in the preview panel. What else would you like to modify?`;
   } else {
     message = `Here's a design based on your request: "${prompt}". You can see it in the preview panel. What would you like to change?`;
+  }
+  
+  // Check if we should add images to the design
+  const isImageRequest = prompt.toLowerCase().includes('image') || 
+                         prompt.toLowerCase().includes('picture') || 
+                         prompt.toLowerCase().includes('photo');
+                         
+  // Include image if we have assets and the user mentions images
+  if (availableAssets.length > 0 && (isImageRequest || Math.random() > 0.5)) {
+    // Add the first available image to the design
+    const firstAsset = availableAssets[0];
+    console.log('Using asset in mock design:', firstAsset);
+    
+    if (!isEditingExisting) {
+      // Create a new design with the image
+      html = `<div class="design-container">
+  <img src="${firstAsset.name}" alt="Uploaded image" class="background-image"/>
+  <div class="content">
+    <h1 class="title">Beautiful Design</h1>
+    <p class="subtitle">Using your uploaded image</p>
+  </div>
+</div>`;
+
+      css = `.design-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+.background-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 1;
+}
+.content {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  color: white;
+  padding: 2rem;
+  background-color: rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
+}
+.title {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+}
+.subtitle {
+  font-size: 1.2rem;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+}`;
+    } else {
+      // Try to add the image to the existing design
+      if (!html.includes('img')) {
+        // Replace or add image to the design
+        html = html.replace(/<div class="design-container">/i, 
+          `<div class="design-container">
+  <img src="${firstAsset.name}" alt="Uploaded image" class="background-image"/>`);
+  
+        // Add styling for the image if not present
+        if (!css.includes('background-image')) {
+          css += `
+.background-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 1;
+}`;
+        }
+      }
+    }
   }
   
   // Parse user request to create somewhat responsive designs
@@ -537,6 +622,42 @@ p {
   }
 }`;
     }
+  }
+
+  // If images are mentioned and available, add image elements to the design
+  const mentionsImages = prompt.toLowerCase().includes('image') || 
+                         prompt.toLowerCase().includes('photo') || 
+                         prompt.toLowerCase().includes('picture');
+  
+  if (mentionsImages && availableAssets.length > 0) {
+    const asset = availableAssets[0]; // Use the first asset for simplicity
+    
+    html = `<div class="image-container">
+  <img src="${asset.url}" alt="${asset.name}" class="user-image" />
+  <div class="image-caption">${asset.name}</div>
+</div>`;
+    
+    css = `.image-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+}
+.user-image {
+  max-width: 90%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.image-caption {
+  margin-top: 10px;
+  font-size: 14px;
+  color: #666;
+  text-align: center;
+}`;
+    
+    message = `I've added your uploaded image "${asset.name}" to the design. You can customize how it appears by describing what you'd like to change.`;
   }
 
   const response: AIResponse = {

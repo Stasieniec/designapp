@@ -7,9 +7,20 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Define Asset type to fix the 'any' type errors
+interface Asset {
+  id: string;
+  name: string;
+  url: string;
+  type: string;
+  uploadedAt: Date;
+  width?: number;
+  height?: number;
+}
+
 export async function POST(request: Request) {
   try {
-    const { prompt, currentHtml, currentCss, selectedFormat } = await request.json();
+    const { prompt, currentHtml, currentCss, selectedFormat, availableAssets } = await request.json();
 
     if (!prompt) {
       return NextResponse.json(
@@ -22,6 +33,11 @@ export async function POST(request: Request) {
     const formatInfo = selectedFormat ? 
       `Format: ${selectedFormat.name} (${selectedFormat.width}×${selectedFormat.height}px)` : 
       'No specific format selected';
+    
+    // Get assets information for the prompt
+    const assetsInfo = availableAssets && availableAssets.length > 0 ?
+      `Available Images: ${availableAssets.map((asset: Asset) => asset.name).join(', ')}` :
+      'No images available';
 
     // Craft a detailed system prompt for design generation
     const systemPrompt = `You are an expert web designer and developer specializing in creating beautiful, responsive designs with HTML, CSS, and SVG. 
@@ -36,6 +52,19 @@ Orientation: ${selectedFormat.height > selectedFormat.width ? 'Portrait/Vertical
 
 Your design must be optimized for these exact dimensions. Create responsive designs that work perfectly at this size.
 ` : ''}
+
+${availableAssets && availableAssets.length > 0 ? `IMPORTANT - AVAILABLE IMAGES:
+The user has uploaded the following images that you can use in your design:
+${availableAssets.map((asset: Asset) => {
+  const dimensions = asset.width && asset.height ? ` (${asset.width}×${asset.height}px)` : '';
+  return `- ${asset.name}${dimensions} (accessible via its name in <img> src attribute)`;
+}).join('\n')}
+
+When using these images, reference them by name in the HTML like this:
+<img src="${availableAssets[0].name}" alt="Description" />
+
+Consider the image dimensions when incorporating them into your design to maintain proper aspect ratios and avoid distortion.
+The system will automatically resolve these image references to the correct URLs.` : ''}
 
 Follow these guidelines:
 1. Create visually appealing, modern designs using current best practices
@@ -85,18 +114,18 @@ Again, you must ONLY return the raw JSON object with no markdown or text outside
     if (currentHtml && currentCss) {
       messages.push({
         role: "user", 
-        content: `Here is my current design:\n\nHTML:\n\`\`\`html\n${currentHtml}\n\`\`\`\n\nCSS:\n\`\`\`css\n${currentCss}\n\`\`\`\n\n${formatInfo}\n\nI would like you to ${prompt}`
+        content: `Here is my current design:\n\nHTML:\n\`\`\`html\n${currentHtml}\n\`\`\`\n\nCSS:\n\`\`\`css\n${currentCss}\n\`\`\`\n\n${formatInfo}\n\n${assetsInfo}\n\nI would like you to ${prompt}`
       });
     } else {
       messages.push({
         role: "user", 
-        content: `${formatInfo}\n\n${prompt}`
+        content: `${formatInfo}\n\n${assetsInfo}\n\n${prompt}`
       });
     }
 
     // Call the OpenAI API
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini",
       messages: messages,
       temperature: 0.7,
       max_tokens: 4000,

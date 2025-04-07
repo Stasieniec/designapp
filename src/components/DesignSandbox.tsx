@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useRef, useEffect, useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useRef, useEffect, forwardRef } from 'react';
+import { Asset } from './AssetsSidebar';
 
 interface DesignSandboxProps {
   htmlContent: string;
@@ -10,11 +11,12 @@ interface DesignSandboxProps {
   onRender?: () => void;
   className?: string;
   getIframeRef?: (iframe: HTMLIFrameElement) => void;
+  assets?: Asset[];
 }
 
+// For backward compatibility with existing code
 export interface DesignSandboxRef {
   updateContent: (html: string, css: string) => void;
-  checkIfReady: () => Promise<boolean>;
 }
 
 const DesignSandbox = forwardRef<DesignSandboxRef, DesignSandboxProps>(({
@@ -25,137 +27,186 @@ const DesignSandbox = forwardRef<DesignSandboxRef, DesignSandboxProps>(({
   onRender,
   className = '',
   getIframeRef,
+  assets = []
 }, ref) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [content, setContent] = useState('');
 
-  // Create the content to be rendered in the iframe
   useEffect(() => {
-    const iframeContent = `
-      <!DOCTYPE html>
-      <html style="height: 100%; margin: 0;">
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <meta charset="utf-8">
-          <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    if (iframeRef.current && iframeRef.current.contentWindow) {
+      const doc = iframeRef.current.contentWindow.document;
+      doc.open();
+      
+      // Create an asset map for quicker lookups
+      const assetMap = assets.reduce((map, asset) => {
+        map[asset.name] = asset.url;
+        return map;
+      }, {} as Record<string, string>);
+      
+      // Process HTML to replace image references with actual URLs
+      let processedHtml = htmlContent;
+      if (assets.length > 0) {
+        // Log assets and replacement process for debugging
+        console.log('Available assets:', assets);
+        
+        // Replace image src references that match asset names
+        // This regex looks for <img src="assetName" and replaces with <img src="actualUrl"
+        const imgRegex = /<img[^>]*src=["']([^"']+)["'][^>]*>/g;
+        processedHtml = htmlContent.replace(imgRegex, (match: string, src: string) => {
+          console.log('Found image src:', src);
+          
+          if (assetMap[src]) {
+            console.log('Replacing with URL:', assetMap[src]);
+            return match.replace(`src="${src}"`, `src="${assetMap[src]}"`).replace(`src='${src}'`, `src='${assetMap[src]}'`);
+          }
+          console.log('No matching asset found for:', src);
+          return match;
+        });
+        
+        console.log('Original HTML:', htmlContent);
+        console.log('Processed HTML:', processedHtml);
+      }
+      
+      // Extract width and height as numbers for exact dimensions
+      const widthPx = typeof width === 'string' && width.endsWith('%') 
+        ? '100%' 
+        : `${parseInt(width.toString(), 10)}px`;
+      
+      const heightPx = typeof height === 'string' && height.endsWith('%') 
+        ? '100%' 
+        : `${parseInt(height.toString(), 10)}px`;
             
-            html, body {
-              margin: 0;
-              padding: 0;
-              width: 100%;
-              height: 100%;
-              overflow: hidden;
-              position: relative;
-              font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            }
-            body {
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              background: white;
-            }
-            * {
-              box-sizing: border-box;
-            }
-            /* Constrain images and media */
-            img, svg, video, canvas, iframe {
-              max-width: 100%;
-              height: auto;
-            }
-            /* Create positioning boundary */
-            .design-container {
-              position: relative;
-              overflow: hidden;
-              font-family: 'Inter', system-ui, -apple-system, sans-serif;
-              transform: translateZ(0); /* Force GPU acceleration for better rendering */
-              background: white; /* Ensure background is white for export */
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              text-align: center;
-              width: 100%;
-              height: 100%;
-            }
-            /* Default styling for all design elements to ensure consistency */
-            .design-container > * {
-              margin: 0 auto;
-            }
-            ${cssContent}
-          </style>
-          <script>
-            // Mark document as loaded when all resources are ready
-            window.designIsReady = false;
-            
-            window.addEventListener('load', () => {
-              // Small delay to ensure everything is rendered
-              setTimeout(() => {
-                window.designIsReady = true;
-                
-                // Apply containment rules
-                const allElements = document.querySelectorAll('*');
-                const bodyRect = document.body.getBoundingClientRect();
-                
-                allElements.forEach(el => {
-                  const rect = el.getBoundingClientRect();
-                  
-                  // If element is outside viewport, bring it back in
-                  if (rect.right > bodyRect.width || rect.bottom > bodyRect.height ||
-                      rect.left < 0 || rect.top < 0) {
-                    if (window.getComputedStyle(el).position === 'absolute') {
-                      // Keep absolute positioned elements within bounds
-                      el.style.maxWidth = '100%';
-                      el.style.maxHeight = '100%';
-                      
-                      if (rect.left < 0) el.style.left = '0';
-                      if (rect.top < 0) el.style.top = '0';
-                      if (rect.right > bodyRect.width) el.style.right = '0';
-                      if (rect.bottom > bodyRect.height) el.style.bottom = '0';
-                    }
-                  }
-                });
-              }, 50);
-            });
-            
-            window.addEventListener('message', (event) => {
-              // Add message handling for communication with parent frame
-              if (event.data.type === 'update') {
-                document.body.innerHTML = event.data.html;
-                const styleEl = document.querySelector('style');
-                if (styleEl) styleEl.textContent = event.data.css;
-                window.designIsReady = false;
-                
-                // Mark as ready after a short delay to allow rendering
-                setTimeout(() => {
-                  window.designIsReady = true;
-                }, 100);
+      // Create the content to be rendered in the iframe
+      const iframeContent = `
+        <!DOCTYPE html>
+        <html style="height: 100%; margin: 0; padding: 0; overflow: hidden;">
+          <head>
+            <meta name="viewport" content="width=${widthPx},height=${heightPx},initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+            <meta charset="utf-8">
+            <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+            <style>
+              @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+              
+              html, body {
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+                position: relative;
+                font-family: 'Inter', system-ui, -apple-system, sans-serif;
+              }
+              body {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                background: white;
+              }
+              * {
+                box-sizing: border-box;
+              }
+              /* Constrain images and media */
+              img, svg, video, canvas, iframe {
+                max-width: 100%;
+                height: auto;
               }
               
-              // Check if design is ready for export
-              if (event.data.type === 'checkReady') {
-                window.parent.postMessage({ 
-                  type: 'designReadyStatus', 
-                  isReady: window.designIsReady 
-                }, '*');
+              /* Fixed size design container */
+              #design-root {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: ${widthPx};
+                height: ${heightPx};
+                overflow: hidden;
+                background: white;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 0;
+                margin: 0;
               }
-            });
-          </script>
-        </head>
-        <body>${htmlContent}</body>
-      </html>
-    `;
-    
-    setContent(iframeContent);
-    
-    // Wait a bit for the iframe to render the content
-    const timer = setTimeout(() => {
-      setIsLoaded(true);
-      onRender?.();
-    }, 200); // Increased timeout for better loading
-    
-    return () => clearTimeout(timer);
-  }, [htmlContent, cssContent, onRender]);
+              /* Create positioning boundary */
+              .design-container {
+                position: relative;
+                overflow: hidden;
+                font-family: 'Inter', system-ui, -apple-system, sans-serif;
+                transform: translateZ(0); /* Force GPU acceleration for better rendering */
+                background: white; /* Ensure background is white for export */
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                text-align: center;
+                width: 100%;
+                height: 100%;
+                padding: 0;
+                margin: 0;
+              }
+              /* Default styling for all design elements to ensure consistency */
+              .design-container > * {
+                max-width: 100%;
+                max-height: 100%;
+                margin: 0 auto;
+              }
+              ${cssContent}
+            </style>
+            <script>
+              // Notify parent when ready
+              window.onload = function() {
+                window.parent.postMessage('iframe-ready', '*');
+              };
+              
+              // Handle updates from parent
+              window.addEventListener('message', (event) => {
+                if (event.data.type === 'update') {
+                  const designRoot = document.getElementById('design-root');
+                  if (designRoot) {
+                    designRoot.innerHTML = event.data.html;
+                  }
+                  
+                  const styleEl = document.querySelector('head > style:last-of-type');
+                  if (styleEl) {
+                    styleEl.textContent = event.data.css;
+                  }
+                  
+                  // Ensure all images have crossOrigin attribute
+                  document.querySelectorAll('img').forEach(img => {
+                    img.crossOrigin = 'anonymous';
+                  });
+                }
+              });
+            </script>
+          </head>
+          <body>
+            <div id="design-root">
+              ${processedHtml}
+            </div>
+          </body>
+        </html>
+      `;
+      
+      doc.write(iframeContent);
+      doc.close();
+
+      // Ensure iframe content is properly loaded
+      const handleLoad = () => {
+        if (onRender) {
+          onRender();
+        }
+        
+        // Ensure images are properly loaded for capture
+        if (iframeRef.current?.contentDocument) {
+          const iframeDoc = iframeRef.current.contentDocument;
+          const images = iframeDoc.querySelectorAll('img');
+          images.forEach(img => {
+            img.crossOrigin = 'anonymous';
+          });
+        }
+      };
+
+      iframeRef.current.onload = handleLoad;
+    }
+  }, [htmlContent, cssContent, width, height, onRender, assets]);
 
   // Provide iframe reference to parent component for capturing as image
   useEffect(() => {
@@ -165,49 +216,49 @@ const DesignSandbox = forwardRef<DesignSandboxRef, DesignSandboxProps>(({
   }, [iframeRef, getIframeRef]);
 
   // Expose the updateContent method via ref
-  useImperativeHandle(ref, () => ({
-    updateContent: (html: string, css: string) => {
-      if (!iframeRef.current || !iframeRef.current.contentWindow) return;
-      
-      // Send new content to iframe using postMessage
-      iframeRef.current.contentWindow.postMessage({
-        type: 'update',
-        html,
-        css
-      }, '*');
-    },
-    
-    // Add method to check if design is ready for export
-    checkIfReady: () => {
-      return new Promise<boolean>((resolve) => {
-        if (!iframeRef.current || !iframeRef.current.contentWindow) {
-          resolve(false);
-          return;
-        }
-        
-        // Set up listener for response
-        const handleReadyResponse = (event: MessageEvent) => {
-          if (event.data.type === 'designReadyStatus') {
-            window.removeEventListener('message', handleReadyResponse);
-            resolve(event.data.isReady);
+  useEffect(() => {
+    if (ref) {
+      const updateContent = (html: string, css: string) => {
+        if (iframeRef.current && iframeRef.current.contentWindow) {
+          // Process HTML to replace image references with actual URLs
+          let processedHtml = html;
+          if (assets.length > 0) {
+            // Create an asset map for quicker lookups
+            const assetMap = assets.reduce((map, asset) => {
+              map[asset.name] = asset.url;
+              return map;
+            }, {} as Record<string, string>);
+            
+            console.log('Update content - Available assets:', assets);
+            
+            // Replace image references
+            const imgRegex = /<img[^>]*src=["']([^"']+)["'][^>]*>/g;
+            processedHtml = html.replace(imgRegex, (match: string, src: string) => {
+              console.log('Update content - Found image src:', src);
+              
+              if (assetMap[src]) {
+                console.log('Update content - Replacing with URL:', assetMap[src]);
+                return match.replace(`src="${src}"`, `src="${assetMap[src]}"`).replace(`src='${src}'`, `src='${assetMap[src]}'`);
+              }
+              console.log('Update content - No matching asset found for:', src);
+              return match;
+            });
           }
-        };
-        
-        window.addEventListener('message', handleReadyResponse);
-        
-        // Ask iframe if it's ready
-        iframeRef.current.contentWindow.postMessage({
-          type: 'checkReady'
-        }, '*');
-        
-        // Timeout after 500ms
-        setTimeout(() => {
-          window.removeEventListener('message', handleReadyResponse);
-          resolve(true); // Assume ready after timeout
-        }, 500);
-      });
+          
+          iframeRef.current.contentWindow.postMessage({
+            type: 'update',
+            html: processedHtml,
+            css
+          }, '*');
+        }
+      };
+
+      // @ts-expect-error - This is using imperative handle which is typed differently
+      ref.current = {
+        updateContent
+      };
     }
-  }));
+  }, [ref, assets]);
 
   return (
     <div className={`relative ${className}`} style={{ width, height }}>
@@ -215,27 +266,8 @@ const DesignSandbox = forwardRef<DesignSandboxRef, DesignSandboxProps>(({
         ref={iframeRef}
         className="w-full h-full border-0 bg-white"
         sandbox="allow-scripts allow-same-origin"
-        srcDoc={content}
-        onLoad={() => {
-          setIsLoaded(true);
-          onRender?.();
-          
-          // Ensure images are properly loaded for capture
-          if (iframeRef.current?.contentDocument) {
-            const iframeDoc = iframeRef.current.contentDocument;
-            const images = iframeDoc.querySelectorAll('img');
-            images.forEach(img => {
-              img.crossOrigin = 'anonymous';
-            });
-          }
-        }}
         title="Design Preview"
       />
-      {!isLoaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-        </div>
-      )}
     </div>
   );
 });
