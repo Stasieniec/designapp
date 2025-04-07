@@ -12,6 +12,8 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "dom-to-image": "^2.6.0",
+    "html2canvas": "^1.4.1",
     "next": "15.2.4",
     "openai": "^4.92.0",
     "react": "^19.0.0",
@@ -21,6 +23,7 @@
     "@cloudflare/next-on-pages": "^1.13.12",
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
+    "@types/dom-to-image": "^2.6.7",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

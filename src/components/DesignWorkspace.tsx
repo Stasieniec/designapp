@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import DesignSandbox, { DesignSandboxRef } from './DesignSandbox';
 import AIDesignAssistant from './AIDesignAssistant';
 import Button from './Button';
 import FormatSelector, { FormatOption } from './FormatSelector';
+import html2canvas from 'html2canvas';
 
 export default function DesignWorkspace() {
   // State to track which step of the process we're in
@@ -30,6 +31,10 @@ export default function DesignWorkspace() {
   const [showCode, setShowCode] = useState(false);
   const [activeCodeTab, setActiveCodeTab] = useState<'html' | 'css'>('html');
   const [zoomLevel, setZoomLevel] = useState(1);
+  const [showExportOptions, setShowExportOptions] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const exportOptionsRef = useRef<HTMLDivElement>(null);
   
   const handleSelectFormat = (format: FormatOption) => {
     setSelectedFormat(format);
@@ -58,12 +63,20 @@ export default function DesignWorkspace() {
   display: flex;
   justify-content: center;
   align-items: center;
-  font-family: system-ui, -apple-system, sans-serif;
+}
+.design-container > * {
+  /* Ensure direct children of the container are centered */
+  margin: 0 auto;
 }
 .placeholder-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   text-align: center;
   color: #a0aec0;
   padding: 2rem;
+  width: 100%;
 }
 .placeholder-text {
   font-size: 1.5rem;
@@ -120,8 +133,168 @@ ${html}
     URL.revokeObjectURL(url);
   };
 
+  // Close export options when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportOptionsRef.current && !exportOptionsRef.current.contains(event.target as Node)) {
+        setShowExportOptions(false);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  const captureDesignAsImage = async (format: 'png' | 'jpg') => {
+    if (!iframeRef.current) return;
+    
+    try {
+      setIsExporting(true);
+      
+      // Show a toast notification
+      const exportFeedback = document.createElement('div');
+      exportFeedback.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 5px; z-index: 9999;';
+      exportFeedback.textContent = 'Preparing for export...';
+      document.body.appendChild(exportFeedback);
+      
+      // Get dimensions
+      const containerWidth = selectedFormat?.width || 1200;
+      const containerHeight = selectedFormat?.height || 800;
+      
+      // Create a div in the document to render the design
+      const renderDiv = document.createElement('div');
+      renderDiv.style.position = 'absolute';
+      renderDiv.style.top = '-9999px';
+      renderDiv.style.left = '-9999px';
+      renderDiv.style.width = `${containerWidth}px`;
+      renderDiv.style.height = `${containerHeight}px`;
+      renderDiv.style.background = 'white';
+      renderDiv.style.overflow = 'hidden';
+      document.body.appendChild(renderDiv);
+      
+      // Get the design content
+      const { html, css } = designState;
+      
+      // Set the content of the div
+      renderDiv.innerHTML = `
+        <style>
+          ${css}
+          /* Force proper dimensions and centering */
+          .design-container {
+            width: ${containerWidth}px !important;
+            height: ${containerHeight}px !important;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+            overflow: hidden !important;
+            background: white !important;
+          }
+        </style>
+        ${html}
+      `;
+      
+      // Wait for content to render
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      try {
+        exportFeedback.textContent = 'Capturing design...';
+        
+        // Use html2canvas to capture the content
+        const canvas = await html2canvas(renderDiv, {
+          width: containerWidth,
+          height: containerHeight,
+          scale: 2,
+          backgroundColor: 'white',
+          useCORS: true,
+          allowTaint: true,
+          logging: false,
+          onclone: (clonedDoc, clonedElement) => {
+            // Make sure design container fills the space
+            const designContainer = clonedElement.querySelector('.design-container');
+            if (designContainer) {
+              (designContainer as HTMLElement).style.cssText = `
+                width: ${containerWidth}px !important;
+                height: ${containerHeight}px !important;
+                display: flex !important;
+                justify-content: center !important;
+                align-items: center !important;
+                overflow: hidden !important;
+                background: white !important;
+                position: relative !important;
+              `;
+            }
+          }
+        });
+        
+        // Convert to data URL
+        const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
+        const quality = format === 'jpg' ? 0.95 : undefined;
+        const dataUrl = canvas.toDataURL(mimeType, quality);
+        
+        // Show the preview
+        setPreviewImage(dataUrl);
+        
+        // Clean up
+        document.body.removeChild(renderDiv);
+        
+        // Show success message
+        exportFeedback.textContent = 'Export successful!';
+        setTimeout(() => {
+          document.body.removeChild(exportFeedback);
+        }, 1000);
+      } catch (error) {
+        console.error('Export error:', error);
+        document.body.removeChild(renderDiv);
+        document.body.removeChild(exportFeedback);
+        alert('Failed to export design. Please try again or use the HTML export option.');
+      }
+      
+      // Close export options dropdown
+      setShowExportOptions(false);
+    } catch (error) {
+      console.error('Export error:', error);
+      alert('Failed to export design. Please try again or use the HTML export option.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const handleCodeTabChange = (tab: 'html' | 'css') => {
     setActiveCodeTab(tab);
+  };
+
+  // Reference to the iframe element for image capture
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  
+  // Function to get iframe reference from sandbox
+  const getIframeRef = (iframe: HTMLIFrameElement) => {
+    iframeRef.current = iframe;
+  };
+
+  const closePreview = () => {
+    setPreviewImage(null);
+  };
+  
+  const downloadPreviewImage = () => {
+    if (!previewImage) return;
+    
+    // Get file format from data URL
+    const format = previewImage.includes('image/jpeg') ? 'jpg' : 'png';
+    
+    // Create download link
+    const a = document.createElement('a');
+    a.href = previewImage;
+    a.download = `${selectedFormat?.name || 'design'}-${new Date().toISOString().split('T')[0]}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    
+    // Clean up
+    document.body.removeChild(a);
+    
+    // Close preview
+    closePreview();
   };
 
   return (
@@ -144,11 +317,44 @@ ${html}
                 >
                   {showCode ? 'Hide Code' : 'Show Code'}
                 </Button>
-                <Button
-                  onClick={handleExport}
-                >
-                  Export Design
-                </Button>
+                <div className="relative">
+                  <Button 
+                    onClick={() => setShowExportOptions(!showExportOptions)}
+                    disabled={isExporting}
+                  >
+                    {isExporting ? 'Exporting...' : 'Export'}
+                  </Button>
+                  {showExportOptions && (
+                    <div 
+                      ref={exportOptionsRef}
+                      className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-gray-800 shadow-lg rounded-md overflow-hidden z-10 border border-gray-200 dark:border-gray-700"
+                    >
+                      <div className="px-4 py-2 text-sm text-gray-500 border-b border-gray-200 dark:border-gray-700">
+                        Export as
+                      </div>
+                      <button
+                        className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center"
+                        onClick={handleExport}
+                      >
+                        <span className="mr-2">📄</span> HTML
+                      </button>
+                      <button
+                        className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center"
+                        onClick={() => captureDesignAsImage('png')}
+                        disabled={isExporting}
+                      >
+                        <span className="mr-2">🖼️</span> PNG Image
+                      </button>
+                      <button
+                        className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center"
+                        onClick={() => captureDesignAsImage('jpg')}
+                        disabled={isExporting}
+                      >
+                        <span className="mr-2">📸</span> JPG Image
+                      </button>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -249,6 +455,7 @@ ${html}
                         className="mx-auto"
                         width="100%"
                         height="100%"
+                        getIframeRef={getIframeRef}
                       />
                     </div>
                   </div>
@@ -292,6 +499,33 @@ ${html}
           </div>
         )}
       </main>
+      
+      {/* Image Preview Dialog */}
+      {previewImage && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4" onClick={closePreview}>
+          <div className="bg-white dark:bg-gray-800 max-w-2xl w-full rounded-lg shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b flex justify-between items-center">
+              <h3 className="text-lg font-bold">Export Preview</h3>
+              <button onClick={closePreview} className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+                ✕
+              </button>
+            </div>
+            <div className="p-4 flex justify-center bg-gray-100 dark:bg-gray-900">
+              <div className="overflow-auto max-h-[70vh]">
+                <img src={previewImage} alt="Export preview" className="shadow-lg" />
+              </div>
+            </div>
+            <div className="p-4 flex justify-end gap-3 bg-gray-50 dark:bg-gray-700">
+              <Button variant="outline" onClick={closePreview}>
+                Cancel
+              </Button>
+              <Button onClick={downloadPreviewImage}>
+                Download
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 } 
